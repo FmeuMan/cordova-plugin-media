@@ -59,6 +59,8 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
 
     private static final String LOG_TAG = "AudioPlayer";
 
+    public static final String OPTION_AUTORELEASEFOCUS = "autoReleaseFocus";
+
     // AudioPlayer message ids
     private static int MEDIA_STATE = 1;
     private static int MEDIA_DURATION = 2;
@@ -85,7 +87,9 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
 
     private MediaPlayer player = null;      // Audio player object
     private boolean prepareOnly = true;     // playback after file prepare flag
-    private int seekOnPrepared = 0;     // seek to this location once media is prepared
+    private int seekOnPrepared = 0;         // seek to this location once media is prepared
+
+    private boolean autoReleaseFocus = false; // if audio focus should be released when playing is over
 
     /**
      * Constructor.
@@ -212,8 +216,19 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
      * Start or resume playing audio file.
      *
      * @param file              The name of the audio file.
+     * @param options           playing/focus options
      */
-    public void startPlaying(String file) {
+    public void startPlaying(String file, JSONObject options) {
+        if(options != null) {
+            if(!handler.requestAudioFocus(options))
+                return;
+            Boolean autoReleaseFocusOnMediaRelease = options.optBoolean(OPTION_AUTORELEASEFOCUS);
+            this.autoReleaseFocus = Boolean.TRUE.equals(autoReleaseFocusOnMediaRelease);
+        }
+        else {
+            this.autoReleaseFocus = false;
+        }
+
         if (this.readyPlayer(file) && this.player != null) {
             this.player.start();
             this.setState(STATE.MEDIA_RUNNING);
@@ -277,6 +292,8 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
     public void onCompletion(MediaPlayer player) {
         Log.d(LOG_TAG, "on completion is calling stopped");
         this.setState(STATE.MEDIA_STOPPED);
+        if(autoReleaseFocus)
+            handler.releaseAudioFocus();
     }
 
     /**
@@ -334,7 +351,7 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
         // If no player yet, then create one
         else {
             this.prepareOnly = true;
-            this.startPlaying(file);
+            this.startPlaying(file, null);
 
             // This will only return value for local, since streaming
             // file hasn't been read yet.

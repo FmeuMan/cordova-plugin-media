@@ -70,6 +70,7 @@ typedef NSUInteger CDVMediaMsg;
     CDVAudioRecorder* recorder;
     NSNumber* volume;
     NSNumber* rate;
+    BOOL autoReleaseFocus;
 }
 
 @property (nonatomic, strong) NSString* resourcePath;
@@ -77,6 +78,7 @@ typedef NSUInteger CDVMediaMsg;
 @property (nonatomic, strong) CDVAudioPlayer* player;
 @property (nonatomic, strong) NSNumber* volume;
 @property (nonatomic, strong) NSNumber* rate;
+@property (nonatomic) BOOL autoReleaseFocus;
 
 @property (nonatomic, strong) CDVAudioRecorder* recorder;
 
@@ -86,9 +88,11 @@ typedef NSUInteger CDVMediaMsg;
 {
     NSMutableDictionary* soundCache;
     AVAudioSession* avSession;
+    int focusRequested;
 }
 @property (nonatomic, strong) NSMutableDictionary* soundCache;
 @property (nonatomic, strong) AVAudioSession* avSession;
+@property (nonatomic, assign) int focusRequested;
 
 - (void)startPlayingAudio:(CDVInvokedUrlCommand*)command;
 - (void)pausePlayingAudio:(CDVInvokedUrlCommand*)command;
@@ -96,6 +100,9 @@ typedef NSUInteger CDVMediaMsg;
 - (void)seekToAudio:(CDVInvokedUrlCommand*)command;
 - (void)release:(CDVInvokedUrlCommand*)command;
 - (void)getCurrentPositionAudio:(CDVInvokedUrlCommand*)command;
+- (BOOL)requestAudioFocus:(CDVInvokedUrlCommand*)command;
+- (BOOL)requestAudioFocusWithOptions:(NSDictionary*)options;
+- (void)releaseAudioFocus:(CDVInvokedUrlCommand*)command;
 
 - (BOOL)hasAudioSession;
 

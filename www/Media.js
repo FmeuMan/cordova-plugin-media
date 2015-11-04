@@ -77,6 +77,22 @@ Media.prototype.play = function(options) {
 };
 
 /**
+ * Request audio focus causing other audio session to reduce volume (ducking)
+ * @param options {object}
+ * @param successCallback {function}
+ */
+Media.requestFocus = function(options, successCallback) {
+    exec(successCallback, null, "Media", "requestAudioFocus", [options]);
+};
+
+/**
+ * Release audio focus.
+ */
+Media.releaseFocus = function(options) {
+    exec(null, null, "Media", "releaseAudioFocus", [options]);
+};
+
+/**
  * Stop playing audio file.
  */
 Media.prototype.stop = function() {

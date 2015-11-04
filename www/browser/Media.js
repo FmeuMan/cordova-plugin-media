@@ -130,6 +130,16 @@ Media.prototype.play = function() {
 };
 
 /**
+ * Request audio focus for short sounds
+ */
+Media.requestFocus = function(options) {};
+
+/**
+ * Release audio focus.
+ */
+Media.releaseFocus = function(options) {};
+
+/**
  * Stop playing audio file.
  */
 Media.prototype.stop = function() {

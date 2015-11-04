@@ -28,7 +28,7 @@
 
 @implementation CDVSound
 
-@synthesize soundCache, avSession;
+@synthesize soundCache, avSession, focusRequested;
 
 // Maps a url for a resource path for recording
 - (NSURL*)urlForRecording:(NSString*)resourcePath
@@ -288,54 +288,44 @@
 
     CDVAudioFile* audioFile = [self audioFileForResource:resourcePath withId:mediaId doValidation:YES forRecording:NO];
     if ((audioFile != nil) && (audioFile.resourceURL != nil)) {
-        if (audioFile.player == nil) {
+        // get the audioSession and set the category to allow Playing when device is locked or ring/silent switch engaged
+        if (![self requestAudioFocusWithOptions:options]) {
+            bError = YES;
+        }
+        if (!bError && (audioFile.player == nil)) {
             bError = [self prepareToPlay:audioFile withId:mediaId];
         }
         if (!bError) {
             // audioFile.player != nil  or player was successfully created
-            // get the audioSession and set the category to allow Playing when device is locked or ring/silent switch engaged
-            if ([self hasAudioSession]) {
-                NSError* __autoreleasing err = nil;
-                NSNumber* playAudioWhenScreenIsLocked = [options objectForKey:@"playAudioWhenScreenIsLocked"];
-                BOOL bPlayAudioWhenScreenIsLocked = YES;
-                if (playAudioWhenScreenIsLocked != nil) {
-                    bPlayAudioWhenScreenIsLocked = [playAudioWhenScreenIsLocked boolValue];
-                }
-
-                NSString* sessionCategory = bPlayAudioWhenScreenIsLocked ? AVAudioSessionCategoryPlayback : AVAudioSessionCategorySoloAmbient;
-                [self.avSession setCategory:sessionCategory error:&err];
-                if (![self.avSession setActive:YES error:&err]) {
-                    // other audio with higher priority that does not allow mixing could cause this to fail
-                    NSLog(@"Unable to play audio: %@", [err localizedFailureReason]);
-                    bError = YES;
-                }
+            NSLog(@"Playing audio sample '%@'", audioFile.resourcePath);
+            // numberOfLoops option
+            NSNumber* loopOption = [options objectForKey:@"numberOfLoops"];
+            NSInteger numberOfLoops = 0;
+            if (loopOption != nil) {
+                numberOfLoops = [loopOption intValue] - 1;
             }
-            if (!bError) {
-                NSLog(@"Playing audio sample '%@'", audioFile.resourcePath);
-                NSNumber* loopOption = [options objectForKey:@"numberOfLoops"];
-                NSInteger numberOfLoops = 0;
-                if (loopOption != nil) {
-                    numberOfLoops = [loopOption intValue] - 1;
-                }
-                audioFile.player.numberOfLoops = numberOfLoops;
-                if (audioFile.player.isPlaying) {
-                    [audioFile.player stop];
-                    audioFile.player.currentTime = 0;
-                }
-                if (audioFile.volume != nil) {
-                    audioFile.player.volume = [audioFile.volume floatValue];
-                }
-
-                audioFile.player.enableRate = YES;
-                if (audioFile.rate != nil) {
-                    audioFile.player.rate = [audioFile.rate floatValue];
-                }
-
-                [audioFile.player play];
-                double position = round(audioFile.player.duration * 1000) / 1000;
-                jsString = [NSString stringWithFormat:@"%@(\"%@\",%d,%.3f);\n%@(\"%@\",%d,%d);", @"cordova.require('cordova-plugin-media.Media').onStatus", mediaId, MEDIA_DURATION, position, @"cordova.require('cordova-plugin-media.Media').onStatus", mediaId, MEDIA_STATE, MEDIA_RUNNING];
-                [self.commandDelegate evalJs:jsString];
+            audioFile.player.numberOfLoops = numberOfLoops;
+            // autoReleaseFocus option ; default behavior is to release focus
+            NSNumber* autoReleaseFocusOpt = [options objectForKey:@"autoReleaseFocus"];
+            audioFile.autoReleaseFocus = autoReleaseFocusOpt == nil || ([autoReleaseFocusOpt boolValue] == YES);
+            // Play logic
+            if (audioFile.player.isPlaying) {
+                [audioFile.player stop];
+                audioFile.player.currentTime = 0;
             }
+            if (audioFile.volume != nil) {
+                audioFile.player.volume = [audioFile.volume floatValue];
+            }
+
+            audioFile.player.enableRate = YES;
+            if (audioFile.rate != nil) {
+                audioFile.player.rate = [audioFile.rate floatValue];
+            }
+
+            [audioFile.player play];
+            double position = round(audioFile.player.duration * 1000) / 1000;
+            jsString = [NSString stringWithFormat:@"%@(\"%@\",%d,%.3f);\n%@(\"%@\",%d,%d);", @"cordova.require('cordova-plugin-media.Media').onStatus", mediaId, MEDIA_DURATION, position, @"cordova.require('cordova-plugin-media.Media').onStatus", mediaId, MEDIA_STATE, MEDIA_RUNNING];
+            [self.commandDelegate evalJs:jsString];
         }
         if (bError) {
             /*  I don't see a problem playing previously recorded audio so removing this section - BG
@@ -357,6 +347,58 @@
         }
     }
     // else audioFile was nil - error already returned from audioFile for resource
+    return;
+}
+
+- (BOOL)requestAudioFocus:(CDVInvokedUrlCommand*)command
+{
+    NSDictionary* options = [command argumentAtIndex:0 withDefault:nil];
+    return [self requestAudioFocusWithOptions:options];
+}
+
+- (BOOL)requestAudioFocusWithOptions:(NSDictionary*)options
+{
+    // get the audioSession and set the category to allow Playing when device is locked or ring/silent switch engaged
+    if ([self hasAudioSession]) {
+        NSError* __autoreleasing err = nil;
+        NSNumber* playAudioWhenScreenIsLocked = [options objectForKey:@"playAudioWhenScreenIsLocked"];
+        NSString* focusMode = [options objectForKey:@"focusMode"];
+        BOOL bPlayAudioWhenScreenIsLocked = YES;
+        AVAudioSessionCategoryOptions sessionCategoryOptions = 0;
+        if (playAudioWhenScreenIsLocked != nil) {
+            bPlayAudioWhenScreenIsLocked = [playAudioWhenScreenIsLocked boolValue];
+        }
+        if (focusMode != nil) {
+            // https://developer.apple.com/library/ios/documentation/AVFoundation/Reference/AVAudioSession_ClassReference/#//apple_ref/doc/c_ref/AVAudioSessionCategoryOptions
+            if([focusMode isEqualToString:@"duck"]) {
+                sessionCategoryOptions = AVAudioSessionCategoryOptionDuckOthers;
+            }
+            else if([focusMode isEqualToString:@"mix"]) {
+                sessionCategoryOptions = AVAudioSessionCategoryOptionMixWithOthers;
+            }
+        }
+
+        NSString* sessionCategory = bPlayAudioWhenScreenIsLocked ? AVAudioSessionCategoryPlayback : AVAudioSessionCategorySoloAmbient;
+        [self.avSession setCategory:sessionCategory withOptions:sessionCategoryOptions error:&err];
+        if ([self.avSession setActive:YES error:&err]) {
+            self.focusRequested++;
+            return YES;
+        }
+        else {
+            // other audio with higher priority that does not allow mixing could cause this to fail
+            NSLog(@"Unable to play audio: %@", [err localizedFailureReason]);
+        }
+    }
+    return NO;
+}
+
+- (void)releaseAudioFocus:(CDVInvokedUrlCommand*)command
+{
+    if (self.avSession && (--self.focusRequested <= 0)) {
+        self.focusRequested = 0;
+        [self.avSession setActive:NO error:nil];
+        self.avSession = nil;
+    }
     return;
 }
 
@@ -489,10 +531,7 @@
             if (audioFile.recorder && [audioFile.recorder isRecording]) {
                 [audioFile.recorder stop];
             }
-            if (self.avSession) {
-                [self.avSession setActive:NO error:nil];
-                self.avSession = nil;
-            }
+            [self releaseAudioFocus:command];
             [[self soundCache] removeObjectForKey:mediaId];
             NSLog(@"Media with id %@ released", mediaId);
         }
@@ -672,8 +711,8 @@
         // jsString = [NSString stringWithFormat: @"%@(\"%@\",%d,%d);", @"cordova.require('cordova-plugin-media.Media').onStatus", mediaId, MEDIA_ERROR, MEDIA_ERR_DECODE];
         jsString = [NSString stringWithFormat:@"%@(\"%@\",%d,%@);", @"cordova.require('cordova-plugin-media.Media').onStatus", mediaId, MEDIA_ERROR, [self createMediaErrorWithCode:MEDIA_ERR_DECODE message:nil]];
     }
-    if (self.avSession) {
-        [self.avSession setActive:NO error:nil];
+    if (audioFile.autoReleaseFocus) {
+        [self releaseAudioFocus:nil];
     }
     [self.commandDelegate evalJs:jsString];
 }
@@ -717,6 +756,7 @@
 @synthesize resourceURL;
 @synthesize player, volume, rate;
 @synthesize recorder;
+@synthesize autoReleaseFocus;
 
 @end
 @implementation CDVAudioPlayer

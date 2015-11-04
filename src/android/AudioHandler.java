@@ -53,7 +53,12 @@ import java.util.HashMap;
  */
 public class AudioHandler extends CordovaPlugin {
 
-    public static String TAG = "AudioHandler";
+    public static final String TAG = "AudioHandler";
+
+    public static final String OPTION_FOCUSMODE = "focusMode";
+    public static final String FOCUSMODE_GAIN = "gain";
+    public static final String FOCUSMODE_DUCK = "duck";
+
     HashMap<String, AudioPlayer> players;	// Audio player object
     ArrayList<AudioPlayer> pausedForPhone;     // Audio players that were paused when phone call came in
     private int origVolumeStream = -1;
@@ -69,12 +74,19 @@ public class AudioHandler extends CordovaPlugin {
     private String recordId;
     private String fileUriStr;
 
+    private AudioManager audioManager;
+    private int focusRequested = 0;
+    private AudioManager.OnAudioFocusChangeListener afChangeListener; 
+
     /**
      * Constructor.
      */
     public AudioHandler() {
         this.players = new HashMap<String, AudioPlayer>();
         this.pausedForPhone = new ArrayList<AudioPlayer>();
+        afChangeListener = new AudioManager.OnAudioFocusChangeListener() {
+           public void onAudioFocusChange (int focusChange) {};
+        };
     }
 
 
@@ -126,7 +138,7 @@ public class AudioHandler extends CordovaPlugin {
             } catch (IllegalArgumentException e) {
                 fileUriStr = target;
             }
-            this.startPlayingAudio(args.getString(0), FileHelper.stripFileProtocol(fileUriStr));
+            this.startPlayingAudio(args.getString(0), FileHelper.stripFileProtocol(fileUriStr), args.optJSONObject(2));
         }
         else if (action.equals("seekToAudio")) {
             this.seekToAudio(args.getString(0), args.getInt(1));
@@ -164,6 +176,15 @@ public class AudioHandler extends CordovaPlugin {
         }
         else if (action.equals("messageChannel")) {
             messageChannel = callbackContext;
+            return true;
+        }
+        else if (action.equals("requestAudioFocus")) {
+            boolean b = this.requestAudioFocus(args.optJSONObject(0));
+            callbackContext.sendPluginResult(new PluginResult(status, b));
+            return true;
+        }
+        else if (action.equals("releaseAudioFocus")) {
+            this.releaseAudioFocus();
             return true;
         }
         else { // Unrecognized action.
@@ -224,7 +245,7 @@ public class AudioHandler extends CordovaPlugin {
             // If phone idle, then resume playing those players we paused
             else if ("idle".equals(data)) {
                 for (AudioPlayer audio : this.pausedForPhone) {
-                    audio.startPlaying(null);
+                    audio.startPlaying(null, null);
                 }
                 this.pausedForPhone.clear();
             }
@@ -289,10 +310,11 @@ public class AudioHandler extends CordovaPlugin {
      * Start or resume playing audio file.
      * @param id				The id of the audio player
      * @param file				The name of the audio file.
+     * @param options           Various playing options
      */
-    public void startPlayingAudio(String id, String file) {
+    public void startPlayingAudio(String id, String file, JSONObject options) {
         AudioPlayer audio = getOrCreatePlayer(id, file);
-        audio.startPlaying(file);
+        audio.startPlaying(file, options);
     }
 
     /**
@@ -362,10 +384,10 @@ public class AudioHandler extends CordovaPlugin {
     public void setAudioOutputDevice(int output) {
         AudioManager audiMgr = (AudioManager) this.cordova.getActivity().getSystemService(Context.AUDIO_SERVICE);
         if (output == 2) {
-            audiMgr.setRouting(AudioManager.MODE_NORMAL, AudioManager.ROUTE_SPEAKER, AudioManager.ROUTE_ALL);
+            audioManager.setRouting(AudioManager.MODE_NORMAL, AudioManager.ROUTE_SPEAKER, AudioManager.ROUTE_ALL);
         }
         else if (output == 1) {
-            audiMgr.setRouting(AudioManager.MODE_NORMAL, AudioManager.ROUTE_EARPIECE, AudioManager.ROUTE_ALL);
+            audioManager.setRouting(AudioManager.MODE_NORMAL, AudioManager.ROUTE_EARPIECE, AudioManager.ROUTE_ALL);
         }
         else {
             System.out.println("AudioHandler.setAudioOutputDevice() Error: Unknown output device.");
@@ -379,11 +401,10 @@ public class AudioHandler extends CordovaPlugin {
      */
     @SuppressWarnings("deprecation")
     public int getAudioOutputDevice() {
-        AudioManager audiMgr = (AudioManager) this.cordova.getActivity().getSystemService(Context.AUDIO_SERVICE);
-        if (audiMgr.getRouting(AudioManager.MODE_NORMAL) == AudioManager.ROUTE_EARPIECE) {
+        if (audioManager.getRouting(AudioManager.MODE_NORMAL) == AudioManager.ROUTE_EARPIECE) {
             return 1;
         }
-        else if (audiMgr.getRouting(AudioManager.MODE_NORMAL) == AudioManager.ROUTE_SPEAKER) {
+        else if (audioManager.getRouting(AudioManager.MODE_NORMAL) == AudioManager.ROUTE_SPEAKER) {
             return 2;
         }
         else {
@@ -406,7 +427,56 @@ public class AudioHandler extends CordovaPlugin {
         }
     }
 
+    /**
+     * Request audio focus for quick sounds to play
+     *
+     * @param options           playing/focus options
+     * @return                  if focus request is granted
+     */
+    public boolean requestAudioFocus(JSONObject options) {
+        String focusMode = null;
+        if(options != null) {
+            focusMode = options.optString(OPTION_FOCUSMODE);
+        }
+
+        int audioFocus;
+        if(FOCUSMODE_GAIN.equals(focusMode)) {
+            audioFocus = AudioManager.AUDIOFOCUS_GAIN_TRANSIENT;
+        }
+        else if(FOCUSMODE_DUCK.equals(focusMode)) {
+            audioFocus = AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK;
+        }
+        else {
+            // focusMod="mix" : default behvavior
+            // focusMod=null : nothing to do
+            return true;
+        }
+
+        int focusRequest = audioManager.requestAudioFocus(afChangeListener, AudioManager.STREAM_MUSIC, audioFocus);
+        if(focusRequest == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            focusRequested++;
+            Log.d(TAG, "requestAudioFocus : granted "+ focusRequested);
+            return true;
+        }
+        else {
+            Log.d(TAG, "requestAudioFocus : refused "+ focusRequested);
+            return false;
+        }
+    }
+
+    /**
+     * Notify the focus is no more requested
+     */
+    public void releaseAudioFocus() {
+        if(--focusRequested <= 0) {
+            focusRequested = 0;
+            audioManager.abandonAudioFocus(afChangeListener);
+        }
+        Log.d(TAG, "releaseAudioFocus : "+ focusRequested);
+    }
+
     private void onFirstPlayerCreated() {
+        audioManager = (AudioManager) this.cordova.getActivity().getSystemService(Context.AUDIO_SERVICE);
         origVolumeStream = cordova.getActivity().getVolumeControlStream();
         cordova.getActivity().setVolumeControlStream(AudioManager.STREAM_MUSIC);
     }
